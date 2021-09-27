@@ -10,14 +10,18 @@ import sys
 from collections import OrderedDict
 import threading
 
+#Declaring PagerDuty API KEY for global usage
 def declare_a_global_pdkey(api_key):
     global pd_api_key
     pd_api_key = api_key
 
+#Declaring AlertOps' V2 API KEY for global usage
 def declare_a_global_aokey(api_key):
     global ao_api_key
     ao_api_key = api_key
 
+#This function creates the log area where messages corresponding to different
+#API Callbacks are displayed for log and debugging purposes
 def createlogArea():
     #pb.start()
     global h
@@ -34,32 +38,38 @@ def createlogArea():
     h.config(command=t.xview)
     v.config(command=t.yview)
 
-
+#This function is used to take the selected Teams from PD for Migration
+#If there are no teams selected, then just the users are transferred automatically
+#else groups are first added to AO, then members of the group are retrieved, and
+#only those members are added as users in AO
 def show_selected():
     t.config(state="normal")
     json_data = {}
-    groupsToBeAdded = []
-    uIds = []
+    groupsToBeAdded = [] #list variable to store just the selected PagerDuty groups to be added
+    uIds = [] #list variable to store uIds of the PagerDuty members in the group
+
+    #if there is no selection of groups, just transfer users.
     if not tv.selection():
         t.insert(END, "- No Groups selected - Transferring just users available \n")
         getUsersFromPD()
     else:
-        for i in tv.selection():
+        for i in tv.selection(): #Loop through every PagerDuty group selection one by one
             groupNamesSelected = tv.item(i)
             json_data = groupNamesSelected["values"][3]
             json_data = ast.literal_eval(json_data)
-            addGroupstoAO(json_data)
+            addGroupstoAO(json_data) #once you get the selected PagerDuty group, first add that to AO
             groupsToBeAdded.append(json_data['name'])
-            ids = listMembersOfgroup(json_data,uIds)
+            ids = listMembersOfgroup(json_data,uIds) #Get the members (ids) of the group
 
         ids = list(list(OrderedDict.fromkeys(ids)))
 
-        for id in ids:
-            userobj = getUser(id)
-            addUserToAO(userobj,groupsToBeAdded)
+        for id in ids: #Loop for each user
+            userobj = getUser(id) #get entire user object that contains all details
+            addUserToAO(userobj,groupsToBeAdded) #add that user to the group
         t.config(state="disabled")
         pb.stop()
 
+#Function to list users of a Team in PagerDuty
 def listMembersOfgroup(team,uIds):
     id = team['id']
     print(id)
@@ -76,6 +86,7 @@ def listMembersOfgroup(team,uIds):
         uIds.append(user['user']['id'])
     return uIds
 
+#Function to retrieve user specific information from PagerDuty
 def getUser(id):
     url = f'https://api.pagerduty.com/users/{id}'
     payload={}
@@ -87,6 +98,7 @@ def getUser(id):
     json_data = json.loads(response.text)
     return json_data
 
+#Function to retrieve contact methods of each user in PagerDuty
 def getContactMethods(uid):
     url = f'https://api.pagerduty.com/users/{uid}/contact_methods'
     payload={}
@@ -105,7 +117,9 @@ def getContactMethods(uid):
     return json_data
 
 
-
+#Function top format email contact method from PagerDuty and make the
+#payload compatible to AlertOps for migrating them, DEFAULT Email-Official
+#method is needed for AlertOps' users
 def formatEmail(label, address):
     if label == "Work" or label == "Pager" or label == "Other":
         AOLabel = "Email-Official"
@@ -133,7 +147,8 @@ def formatEmail(label, address):
         }
     return data_set
 
-
+#Function top format phone contact method from PagerDuty and make the
+#payload compatible to AlertOps for migrating them
 def formatPhone(label, address, country_code):
     if label == "Work" or label == "Skype" or label == "Other":
         AOLabel = "Phone-Official"
@@ -162,7 +177,8 @@ def formatPhone(label, address, country_code):
         }
     return data_set
 
-
+#Function top format SMS contact method from PagerDuty and make the
+#payload compatible to AlertOps for migrating them
 def formatSMS(label, address, country_code):
     if label == "Mobile":
         AOLabel = "SMS-Official"
@@ -190,7 +206,8 @@ def formatSMS(label, address, country_code):
         }
     return data_set
 
-
+#Function top format Push-Notification contact method from PagerDuty and make the
+#payload compatible to AlertOps for migrating them
 def formatPush(label, address, device_type):
     data_set = {
           "contact_method_name": "Push Official",
@@ -214,6 +231,9 @@ def formatPush(label, address, device_type):
     return data_set
 
 
+#Functiopn to add user to AlertOps - first get contact methods, format them,
+#add them to the payload and then add the users
+#This function also calls the method to add users to their respective groups as well
 def addUserToAO(user,groupsToBeAdded):
     url = "https://api.alertops.com/api/v2/users"
 
@@ -221,7 +241,7 @@ def addUserToAO(user,groupsToBeAdded):
     #Formatting the name to get the first name, last name and username
     nameOriginal = user['user']['name']
     nameSplit = nameOriginal.split() #assuming a single firstname and lastname, first name will be nameSplit[0], lastname will be nameSplit][1]
-    username = user['user']['email']
+    username = user['user']['email'] #username is the email
     #username = f'{nameSplit[0]}_{user["id"]}'
     if len(nameSplit) == 1:
         nameSplit.append(nameSplit[0][0])
@@ -281,21 +301,24 @@ def addUserToAO(user,groupsToBeAdded):
         print("There was some error adding User " +username+ " to AlertOps, Error Message: ", json_data['errors'])
         t.insert(END,"- There was some error adding User " +username+ " to AlertOps, Error Message: "+ str(json_data['errors'])+"\n")
 
-
+    #add user to their respective groups
     if len(user['user']['teams']) > 0:
         addUserToGroupAO(user,username,groupsToBeAdded)
 
 
 
-
+#Function to retrieve groupID for the group in AlertOps, and then add
+#the user to that particular group
 def addUserToGroupAO(user,username,groupsToBeAdded):
     teamNames = user['user']['teams']
     for team in teamNames:
         if team['summary'] in groupsToBeAdded:
-            gId = getGroupIDFromAO(team)
-            addUserToGID(gId,user,username,team)
+            gId = getGroupIDFromAO(team) #you need the group ID to add user to a group in AlertOps
+            addUserToGID(gId,user,username,team) #once you ger the ID, you can add the user to the groups
 
 
+
+#Function to do the API call to retrieve group ID, by giving the groupname
 def getGroupIDFromAO(team):
     groupName = team['summary']
     print(groupName)
@@ -324,6 +347,8 @@ def getGroupIDFromAO(team):
         return group_id
 
 
+
+#Function to add user to the group by passing the group ID
 def addUserToGID(gID,user,username,team):
     url = f'https://api.alertops.com/api/v2/groups/{gID}/members'
     groupName = team['summary']
@@ -366,6 +391,10 @@ def addUserToGID(gID,user,username,team):
         print("There was some error adding user " +username+ " to group "+groupName+" in AlertOps, Error Message: ", json_data['errors'])
         t.insert(END, "- There was some error adding user " +username+ " to group "+groupName+" in AlertOps, Error Message: " +str(json_data['errors'])+"\n")
 
+
+#Function to add teams retrieved from PagerDuty to alertops
+#This is the first step in the migration, you select groups and
+#first migrate the groups and then respective users of those groups
 def addGroupstoAO(group):
     url = "https://api.alertops.com/api/v2/groups"
     nameOfGroup = group['name']
@@ -410,6 +439,7 @@ def addGroupstoAO(group):
         t.insert(END,"- There was some error adding group " +nameOfGroup+ " to AlertOps, Error Message: "+str(json_data['errors'])+"\n")
 
 
+#Function to retrieve users from PagerDuty and then add jsut the users to AO
 def getUsersFromPD():
 
     url = "https://api.pagerduty.com/users"
@@ -434,6 +464,9 @@ def getUsersFromPD():
     t.config(state="disabled")
     pb.stop()
 
+
+#This function is similar to the previous function for adding users to AlertOps
+#Except this function wont call the method to add users to their groups
 def addUserToAOWithoutTeams(user):
     url = "https://api.alertops.com/api/v2/users"
 
@@ -501,7 +534,10 @@ def addUserToAOWithoutTeams(user):
         t.insert(END, "- There was some error adding User " +username+ " to AlertOps, Error Message: "+ str(json_data['errors'])+"\n")
 
 
+#Function to show the table of Teams retrieved from PagerDuty
 def showTable():
+
+    #Globally declaring the variables for table views, API Keys and labels to access them throughout methods
     global tv
     global entry
     global entry2
@@ -510,6 +546,8 @@ def showTable():
     ao_api_key= entry2.get()
     declare_a_global_pdkey(pd_api_key)
     declare_a_global_aokey(ao_api_key)
+
+    #Create TreeView to display teams from PagerDuty
     tv = ttk.Treeview(
         ws,
         columns=(1, 2, 3),
@@ -522,6 +560,7 @@ def showTable():
     tv.heading(2, text='ID')
     tv.heading(3, text='Description')
 
+    #URL to retrieve Teams from PagerDuty
     url = "https://api.pagerduty.com/teams"
 
     payload={}
@@ -537,14 +576,17 @@ def showTable():
         sys.exit()
 
     json_data = json.loads(response.text)
-    global pb
+    global pb #pb represents the variable for a ProgressBar to denote migration is happening
     if 'teams' in json_data and len(json_data['teams']) > 0:
         for idx, team in enumerate(json_data['teams']):
             idx = idx + 1
+            #Display each team in the table, along with the values specified below
             tv.insert(parent='', index=idx, iid=idx, values=(team['name'], team['id'], team['description'], team))
         style = ttk.Style()
         style.theme_use("default")
         style.map("Treeview")
+
+        #On clicking start transfer you start the migration, for selected groups - if no group is selected it will migrate all users
         Button(ws, text="Start Transfer", command=lambda: [threading.Thread(target=show_selected).start(),pb.start()]).pack()
         pb = ttk.Progressbar(
                 ws,
@@ -555,6 +597,7 @@ def showTable():
         pb.pack()
         createlogArea()
     else:
+        #if no teams were retrieved from PagerDuty, that is, if PD has no teams, then just migrate users from PD
         Button(ws, text="No teams - Click to just migrate users", command=lambda: [threading.Thread(target=getUsersFromPD).start(),pb.start()]).pack()
         pb = ttk.Progressbar(
                 ws,
@@ -566,6 +609,10 @@ def showTable():
         createlogArea()
 
 
+#MAIN UI LOOP
+#IN THIS PROGRAM/CODE/COMMENTS THE WORDS "Groups"/"Teams" AND "Users"/"Members"
+#MAYBE USED INTERCHANGEABLY - THEY MEAN THE SAME RESPECTIVELY
+#PD REPRESENTS PAGERDUTY AND AO REPRESENTS ALERTOPS
 ws = Tk()
 ws.title('PagerDuty to AlertOps Migrator Utility')
 ws.geometry('700x250')
