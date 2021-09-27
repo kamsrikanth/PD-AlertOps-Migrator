@@ -3,7 +3,7 @@ Migrator script for porting users/groups/schedules from PagerDuty to AlertOps
 
 ==============================================================================
 
-*****Code is currently in draft mode (working), need to organize it more and migration currently works for users and groups*****
+*****Code is currently in draft mode (working), need to organize it more (split up into multiple files for functionality division and clarity); and migration currently works for users and groups*****
 
 
 
